@@ -1,0 +1,39 @@
+# =============================================================
+# Feature 정의 설정 파일
+#
+# - window_seconds : 통계 Feature를 만들 때 사용할 최근 N초 구간
+# - sample_rate_hz : 합성 데이터 생성 / 백엔드 버퍼링에 쓰는 샘플링 주기 (참고값)
+# - raw_signals    : Agent(CAN)에서 들어오는 원본 신호 목록
+# - features       : 학습/추론에 실제로 사용할 통계 Feature 목록
+#
+# features[].agg 로 지원하는 집계 함수: mean, std, max, min, sum, last
+# 이 파일만 수정하면 Feature 구성을 바꿀 수 있다 (코드 변경 불필요).
+# =============================================================
+
+window_seconds: 10
+sample_rate_hz: 10
+
+time_column: timestamp
+
+raw_signals:
+  - rpm
+  - speed
+  - battery_voltage
+  - motor_current
+  - motor_temperature
+  - hydraulic_pressure
+  - error_count
+
+features:
+  - { name: rpm_mean,          source: rpm,                agg: mean }
+  - { name: rpm_std,           source: rpm,                agg: std }
+  - { name: speed_mean,        source: speed,              agg: mean }
+  - { name: current_mean,      source: motor_current,      agg: mean }
+  - { name: current_std,       source: motor_current,      agg: std }
+  - { name: current_max,       source: motor_current,      agg: max }
+  - { name: temperature_max,   source: motor_temperature,  agg: max }
+  - { name: temperature_mean,  source: motor_temperature,  agg: mean }
+  - { name: pressure_mean,     source: hydraulic_pressure, agg: mean }
+  - { name: pressure_std,      source: hydraulic_pressure, agg: std }
+  - { name: battery_mean,      source: battery_voltage,    agg: mean }
+  - { name: error_count_sum,   source: error_count,        agg: sum }

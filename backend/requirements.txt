@@ -1,0 +1,12 @@
+# Backend 런타임 의존성 (core 추론 코드 포함 실행용)
+fastapi>=0.110
+uvicorn[standard]>=0.29
+paho-mqtt>=1.6,<2.0
+pydantic>=2.6
+
+# core 공유 코드가 사용하는 추론 의존성
+scikit-learn>=1.4
+pandas>=2.1
+numpy>=1.26
+pyyaml>=6.0
+joblib>=1.3
