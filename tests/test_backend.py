@@ -117,3 +117,40 @@ def test_listed_after_http_ingest(client):
 def test_unknown_robot_404(client):
     r = client.get("/robots/does-not-exist")
     assert r.status_code == 404
+
+
+def test_mqtt_publishes_health(service):
+    """수신한 CAN 샘플의 추론 결과가 robots/<id>/health 로 발행된다.
+
+    실제 브로커 없이, paho 클라이언트를 가짜로 대체해 publish 호출을 검증한다.
+    """
+    import json
+    from unittest.mock import MagicMock
+
+    from backend.mqtt_client import MqttIngestor
+    from backend.settings import Settings
+
+    os.environ["MQTT_ENABLED"] = "false"  # 실제 연결 시도 방지(생성자만 사용)
+    ingestor = MqttIngestor(service, Settings())
+    ingestor._client = MagicMock()  # connect/publish 를 가로챈다
+
+    payload = {
+        "timestamp": "2026-01-01T00:00:00",
+        "rpm": 1500, "speed": 8, "battery_voltage": 48,
+        "motor_current": 30, "motor_temperature": 55,
+        "hydraulic_pressure": 120, "error_count": 0,
+    }
+    msg = MagicMock()
+    msg.topic = "robots/robot-pub/can"
+    msg.payload = json.dumps(payload).encode("utf-8")
+
+    ingestor._on_message(ingestor._client, None, msg)
+
+    ingestor._client.publish.assert_called_once()
+    args, kwargs = ingestor._client.publish.call_args
+    assert args[0] == "robots/robot-pub/health"
+    published = json.loads(args[1])
+    assert published["robot_id"] == "robot-pub"
+    assert "status" in published
+    assert kwargs.get("qos") == 1
+    assert kwargs.get("retain") is True

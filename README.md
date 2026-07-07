@@ -91,6 +91,12 @@ $env:MQTT_HOST = "localhost"
 MQTT 수신과 HTTP `/ingest` 는 **동일한 `InferenceService`** 를 거친다.
 MQTT 브로커가 없으면 경고만 남기고 API 는 정상 기동한다(graceful degradation).
 
+**추론 결과 발행**: MQTT 수신 경로에서는 매 추론 결과를 `robots/<id>/health`
+토픽으로 다시 publish 한다(QoS1, retain). 웹 백엔드가 이를 구독해 이상
+이벤트 저장/알림을 담당하며, 추론 백엔드는 발행까지만 하고 저장·판단은 하지
+않는다(무상태). 토픽/QoS/retain 은 `MQTT_HEALTH_TOPIC` /`MQTT_HEALTH_QOS` /
+`MQTT_HEALTH_RETAIN` 환경변수로 조정한다.
+
 ### Docker
 
 ```powershell
@@ -113,11 +119,48 @@ Feature 가 "최근 N초 윈도우의 통계(std 등)"이므로 **윈도우 내 
 시간 구간을 채우기 전에는 점수 대신 `status: "warmup"`, `health_score: null`
 을 반환한다.
 
+## 데일리 누적 재학습 (`training/daily_retrain.py`)
+
+에이전트 개발자가 매일 정제해 떨구는 정상 데이터 파일을 누적해, **정해진 시각에
+자동 재학습 → 검증 → 승격**하는 오케스트레이터. Isolation Forest 는 incremental
+학습이 불가하므로 "누적 학습"=매번 최근 N일 데이터로 from-scratch 재학습이다.
+재학습이 정확도를 올리는 원리는 **정상 envelope 커버리지 확대(오탐 감소)** 와
+**드리프트 적응**이다.
+
+```
+data/daily/YYYY-MM-DD.csv  (에이전트가 매일 떨굼, config 와 동일 스키마)
+data/eval/{normal,anomalies}.csv  (고정 평가셋 — 절대 안 바뀌는 비교 기준)
+```
+
+```powershell
+& $PY -m training.daily_retrain --daily-dir data/daily `
+      --eval-normal data/eval/normal.csv --eval-anomalies data/eval/anomalies.csv `
+      --window-days 30 --models-dir models
+```
+
+흐름: **최근 N일 concat → 후보 학습(candidates/<date>) → 고정 eval셋으로 후보 vs
+현행 비교 → 악화 없을 때만 원자적 승격(+archive 백업 + manifest.json)**.
+
+| 검증 지표 | 의미 | 통과 조건 |
+|---|---|---|
+| `normal_ratio` | 정상셋의 normal 비율 (오탐 적을수록 ↑) | 현행 − `tolerance` 이상 |
+| `detect_ratio` | 이상셋의 비-normal 비율 (미탐 적을수록 ↑) | 현행 − `tolerance` 이상 |
+
+현행 모델이 없으면 부트스트랩으로 무조건 승격. 라벨은 학습이 아니라 **eval셋
+(검증)** 에만 쓴다 — 비지도 모델은 절대 정확도를 못 재므로 고정셋 상대 비교로 판단.
+
+종료 코드: `0` 승격(스케줄러가 이어서 추론 백엔드 재시작), `2` 거부(현행 유지),
+`1` 데이터 부족. 스케줄링은 OS(작업 스케줄러/cron)로 매일 특정 시각 실행하고,
+승격(exit 0) 시에만 추론 백엔드를 재시작하도록 연결한다.
+
+> 데이터 스키마/주기/파일 규약은 `docs/data-contract.md` (에이전트 개발자 전달용) 참조.
+
 ## 산출물
 
 - **`model.pkl`** — 학습된 detector(스케일러 포함) + Feature 순서 + window 크기 +
   Health 보정 파라미터 + 메타. Backend 가 `ModelBundle.load()` 한 번으로 추론 가능.
 - **`feature_config.yaml`** — 학습에 사용된 Feature 정의 (Backend 배포용 복사본).
+- **`manifest.json`** — 마지막 재학습의 데이터 범위·메트릭·승격 여부 기록.
 
 ## Feature Engineering
 

@@ -1,8 +1,13 @@
-"""MQTT 수신 클라이언트.
+"""MQTT 수신/발행 클라이언트.
 
 Agent 가 robots/<robot_id>/can 토픽으로 publish 하는 CAN 샘플(JSON)을 수신해
-InferenceService.ingest 로 흘려보낸다. paho 의 네트워크 루프는 별도 스레드에서
-동작하므로(loop_start), 공유 상태는 InferenceService 내부 Lock 으로 보호된다.
+InferenceService.ingest 로 흘려보내고, 추론 결과(health)를 robots/<id>/health 로
+다시 발행한다. 웹 백엔드가 health 를 구독해 이벤트 저장/알림을 담당한다.
+추론 백엔드는 발행까지만 하고 저장/판단은 하지 않는다(무상태). 같은 paho
+클라이언트로 sub(can)·pub(health) 를 모두 처리한다.
+
+paho 의 네트워크 루프는 별도 스레드에서 동작하므로(loop_start), 공유 상태는
+InferenceService 내부 Lock 으로 보호된다.
 
 페이로드 예: {"robot_id":"robot-001","timestamp":"...","rpm":1500, ...}
 robot_id 는 페이로드 우선, 없으면 토픽에서 파싱.
@@ -57,9 +62,22 @@ class MqttIngestor:
             logger.warning("robot_id 없음, 무시 topic=%s", msg.topic)
             return
         try:
-            self.service.ingest(robot_id, payload)
+            result = self.service.ingest(robot_id, payload)
         except Exception as exc:  # noqa: BLE001 - 콜백에서 예외가 루프를 죽이지 않게
             logger.exception("추론 실패 robot=%s: %s", robot_id, exc)
+            return
+        self._publish_health(robot_id, result)
+
+    def _publish_health(self, robot_id: str, result: dict) -> None:
+        """추론 결과를 robots/<id>/health 로 발행. 발행 실패가 수신을 막지 않게 격리."""
+        s = self.settings
+        topic = s.mqtt_health_topic.format(robot_id=robot_id)
+        try:
+            self._client.publish(
+                topic, json.dumps(result), qos=s.mqtt_health_qos, retain=s.mqtt_health_retain
+            )
+        except Exception as exc:  # noqa: BLE001 - 발행 실패는 로그만, 루프 유지
+            logger.warning("health 발행 실패 robot=%s topic=%s: %s", robot_id, topic, exc)
 
     @staticmethod
     def _robot_id_from_topic(topic: str) -> str | None:
